@@ -30,6 +30,7 @@ function initSchema(db) {
       model TEXT NOT NULL DEFAULT '',
       notes TEXT NOT NULL DEFAULT '',
       is_public INTEGER NOT NULL DEFAULT 0,
+      write_token TEXT,
       created_at INTEGER NOT NULL DEFAULT (CAST(strftime('%s', 'now') AS INTEGER) * 1000),
       FOREIGN KEY (user_id) REFERENCES users(id)
     );
@@ -63,6 +64,11 @@ function initSchema(db) {
     CREATE INDEX IF NOT EXISTS idx_meas_watch ON measurements(watch_id);
     CREATE INDEX IF NOT EXISTS idx_meas_brand ON watches(brand, model);
   `);
+
+  // Migration: add write_token column to existing databases
+  try { db.exec('ALTER TABLE watches ADD COLUMN write_token TEXT'); } catch {}
+  // Fill in tokens for any watches that don't have one yet
+  db.exec("UPDATE watches SET write_token = lower(hex(randomblob(16))) WHERE write_token IS NULL");
 }
 
 /**

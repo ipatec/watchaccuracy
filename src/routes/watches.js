@@ -6,6 +6,13 @@ const { getDb } = require('../database');
 
 const router = express.Router();
 
+/** Returns true when the request carries a valid write token for this watch. */
+function hasValidWriteToken(req, watch) {
+  return req.query.write_token &&
+    watch.write_token &&
+    req.query.write_token === watch.write_token;
+}
+
 // GET /api/watches - list current user's watches
 router.get('/', (req, res) => {
   const db = getDb();
@@ -28,20 +35,29 @@ router.post('/', (req, res) => {
   const { brand = '', model = '', notes = '', is_public = 0 } = req.body;
   const db = getDb();
   const id = uuidv4();
+  const write_token = uuidv4();
   db.prepare(
-    `INSERT INTO watches (id, user_id, brand, model, notes, is_public) VALUES (?, ?, ?, ?, ?, ?)`
-  ).run(id, req.userId, brand, model, notes, is_public ? 1 : 0);
+    `INSERT INTO watches (id, user_id, brand, model, notes, is_public, write_token) VALUES (?, ?, ?, ?, ?, ?, ?)`
+  ).run(id, req.userId, brand, model, notes, is_public ? 1 : 0, write_token);
   const watch = db.prepare('SELECT * FROM watches WHERE id = ?').get(id);
   res.status(201).json(watch);
 });
 
-// GET /api/watches/:id - get watch details (public or owned)
+// GET /api/watches/:id - get watch details (public, owned, or valid write token)
 router.get('/:id', (req, res) => {
   const db = getDb();
   const watch = db.prepare('SELECT * FROM watches WHERE id = ?').get(req.params.id);
   if (!watch) return res.status(404).json({ error: 'Watch not found' });
-  if (watch.user_id !== req.userId && !watch.is_public) {
+
+  const isOwner = watch.user_id === req.userId;
+  if (!isOwner && !watch.is_public && !hasValidWriteToken(req, watch)) {
     return res.status(403).json({ error: 'Access denied' });
+  }
+
+  // Only expose the write_token to the owner
+  if (!isOwner) {
+    const { write_token, ...safeWatch } = watch;
+    return res.json(safeWatch);
   }
   res.json(watch);
 });
@@ -79,7 +95,7 @@ router.get('/:id/reference', (req, res) => {
   const db = getDb();
   const watch = db.prepare('SELECT * FROM watches WHERE id = ?').get(req.params.id);
   if (!watch) return res.status(404).json({ error: 'Watch not found' });
-  if (watch.user_id !== req.userId && !watch.is_public) {
+  if (watch.user_id !== req.userId && !watch.is_public && !hasValidWriteToken(req, watch)) {
     return res.status(403).json({ error: 'Access denied' });
   }
   const ref = db
@@ -90,12 +106,14 @@ router.get('/:id/reference', (req, res) => {
   res.json(ref || null);
 });
 
-// POST /api/watches/:id/reference - set a new reference/sync point
+// POST /api/watches/:id/reference - set a new reference/sync point (owner or write token)
 router.post('/:id/reference', (req, res) => {
   const db = getDb();
   const watch = db.prepare('SELECT * FROM watches WHERE id = ?').get(req.params.id);
   if (!watch) return res.status(404).json({ error: 'Watch not found' });
-  if (watch.user_id !== req.userId) return res.status(403).json({ error: 'Access denied' });
+  if (watch.user_id !== req.userId && !hasValidWriteToken(req, watch)) {
+    return res.status(403).json({ error: 'Access denied' });
+  }
 
   const { device_timestamp = Date.now(), watch_time_seconds } = req.body;
   if (watch_time_seconds === undefined || watch_time_seconds === null) {

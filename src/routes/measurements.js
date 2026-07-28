@@ -28,9 +28,13 @@ router.get('/', (req, res) => {
   const db = getDb();
   const watch = db.prepare('SELECT * FROM watches WHERE id = ?').get(req.params.watchId);
   if (!watch) return res.status(404).json({ error: 'Watch not found' });
-  if (watch.user_id !== req.userId && !watch.is_public) {
+
+  const isOwner = watch.user_id === req.userId;
+  const hasToken = req.query.write_token && watch.write_token && req.query.write_token === watch.write_token;
+  if (!isOwner && !watch.is_public && !hasToken) {
     return res.status(403).json({ error: 'Access denied' });
   }
+
   const measurements = db
     .prepare(
       `SELECT * FROM measurements WHERE watch_id = ? ORDER BY device_timestamp ASC`
@@ -44,7 +48,12 @@ router.post('/', upload.single('photo'), (req, res) => {
   const db = getDb();
   const watch = db.prepare('SELECT * FROM watches WHERE id = ?').get(req.params.watchId);
   if (!watch) return res.status(404).json({ error: 'Watch not found' });
-  if (watch.user_id !== req.userId) return res.status(403).json({ error: 'Access denied' });
+
+  const isOwner = watch.user_id === req.userId;
+  const hasToken = req.query.write_token && watch.write_token && req.query.write_token === watch.write_token;
+  if (!isOwner && !hasToken) {
+    return res.status(403).json({ error: 'Access denied' });
+  }
 
   const {
     device_timestamp = Date.now(),

@@ -261,3 +261,30 @@ test('calcDrift: day boundary wrapping works', () => {
   assert.ok(result !== null);
   assert.ok(Math.abs(result.driftSeconds - 5) < 0.01, `Expected ~5s drift, got ${result.driftSeconds}`);
 });
+
+test('calcDrift: multi-day measurement works correctly', () => {
+  const { calcDrift } = require('../src/database');
+  const { DatabaseSync } = require('node:sqlite');
+  const db = new DatabaseSync(':memory:');
+  db.exec(`
+    CREATE TABLE users (id TEXT PRIMARY KEY, created_at INTEGER NOT NULL DEFAULT 0);
+    CREATE TABLE watches (id TEXT PRIMARY KEY, user_id TEXT NOT NULL, brand TEXT DEFAULT '', model TEXT DEFAULT '', notes TEXT DEFAULT '', is_public INTEGER DEFAULT 0, created_at INTEGER DEFAULT 0);
+    CREATE TABLE reference_points (id INTEGER PRIMARY KEY AUTOINCREMENT, watch_id TEXT NOT NULL, device_timestamp INTEGER NOT NULL, watch_time_seconds INTEGER NOT NULL, created_at INTEGER DEFAULT 0);
+    CREATE TABLE measurements (id INTEGER PRIMARY KEY AUTOINCREMENT, watch_id TEXT NOT NULL, device_timestamp INTEGER NOT NULL, watch_hours INTEGER NOT NULL, watch_minutes INTEGER NOT NULL, watch_seconds INTEGER NOT NULL, drift_seconds REAL, drift_rate_spd REAL, photo_filename TEXT, notes TEXT DEFAULT '', created_at INTEGER DEFAULT 0);
+  `);
+  db.prepare('INSERT INTO users VALUES (?,?)').run('u2', 0);
+  db.prepare('INSERT INTO watches VALUES (?,?,?,?,?,?,?)').run('w2','u2','','','',0,0);
+
+  // Reference: T0, watch at 12:00:00
+  const T0 = 1700000000000;
+  const refSeconds = 12 * 3600; // 12:00:00
+  db.prepare('INSERT INTO reference_points (watch_id, device_timestamp, watch_time_seconds) VALUES (?,?,?)').run('w2', T0, refSeconds);
+
+  // Measure 3 days later: watch shows 12:00:05 (gained 5 seconds over 3 days)
+  const T1 = T0 + 3 * 86400 * 1000;
+  const result = calcDrift(db, 'w2', 12, 0, 5, T1);
+  assert.ok(result !== null, 'drift should be calculated');
+  assert.ok(Math.abs(result.driftSeconds - 5) < 0.01, `Expected ~5s drift, got ${result.driftSeconds}`);
+  // Rate should be ~5/3 s/day
+  assert.ok(Math.abs(result.driftRateSpd - 5 / 3) < 0.01, `Expected ~1.67 s/day, got ${result.driftRateSpd}`);
+});

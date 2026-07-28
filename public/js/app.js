@@ -507,6 +507,7 @@ async function showMeasureView(watchId) {
     </div>
 
     <div class="card">
+      <div id="ocr-status" class="ocr-status"></div>
       <div class="form-group">
         <label>Time shown on watch (H : M : S)</label>
         <div class="time-picker">
@@ -569,7 +570,63 @@ function capturePhoto() {
       cameraStream.getTracks().forEach(t => t.stop());
       cameraStream = null;
     }
+
+    // Attempt to OCR the watch time from the captured photo
+    runOcrOnCanvas(canvas);
   }, 'image/jpeg', 0.85);
+}
+
+// Parse the first valid HH:MM or HH:MM:SS pattern from OCR text
+function parseTimeFromText(text) {
+  const matches = [...text.matchAll(/\b(\d{1,2}):(\d{2})(?::(\d{2}))?\b/g)];
+  for (const match of matches) {
+    const h = parseInt(match[1], 10);
+    const m = parseInt(match[2], 10);
+    const s = match[3] !== undefined ? parseInt(match[3], 10) : 0;
+    if (h >= 0 && h <= 23 && m >= 0 && m <= 59 && s >= 0 && s <= 59) {
+      return { h, m, s };
+    }
+  }
+  return null;
+}
+
+async function runOcrOnCanvas(canvas) {
+  const statusEl = document.getElementById('ocr-status');
+  if (!statusEl) return;
+
+  // Tesseract may not be loaded (e.g. offline)
+  if (typeof Tesseract === 'undefined') {
+    statusEl.textContent = '⚠ OCR unavailable — please enter time manually';
+    statusEl.className = 'ocr-status failed';
+    return;
+  }
+
+  statusEl.textContent = '🔍 Scanning photo for time…';
+  statusEl.className = 'ocr-status loading';
+
+  try {
+    const { data: { text } } = await Tesseract.recognize(canvas, 'eng', {
+      tessedit_char_whitelist: '0123456789:'
+    });
+
+    const time = parseTimeFromText(text);
+    if (time) {
+      const hEl = document.getElementById('meas-h');
+      const mEl = document.getElementById('meas-m');
+      const sEl = document.getElementById('meas-s');
+      if (hEl) hEl.value = time.h;
+      if (mEl) mEl.value = time.m;
+      if (sEl) sEl.value = time.s;
+      statusEl.textContent = `✓ Detected ${pad(time.h)}:${pad(time.m)}:${pad(time.s)} — please verify`;
+      statusEl.className = 'ocr-status detected';
+    } else {
+      statusEl.textContent = '⚠ Could not detect time — please enter manually';
+      statusEl.className = 'ocr-status failed';
+    }
+  } catch (e) {
+    statusEl.textContent = '⚠ OCR failed — please enter time manually';
+    statusEl.className = 'ocr-status failed';
+  }
 }
 
 function retakePhoto() {
@@ -577,6 +634,8 @@ function retakePhoto() {
   document.getElementById('photo-preview').classList.remove('visible');
   document.getElementById('btn-retake').classList.add('hidden');
   document.getElementById('btn-open-cam').classList.remove('hidden');
+  const statusEl = document.getElementById('ocr-status');
+  if (statusEl) { statusEl.textContent = ''; statusEl.className = 'ocr-status'; }
 }
 
 async function submitMeasurement(watchId) {

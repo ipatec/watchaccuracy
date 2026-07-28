@@ -89,19 +89,17 @@ function calcDrift(db, watchId, watchH, watchM, watchS, deviceTimestampMs) {
   const refWatchSeconds = ref.watch_time_seconds;
 
   // Raw difference in seconds (what the watch shows vs what it should show)
-  let rawDiff = measWatchSeconds - refWatchSeconds;
+  const rawDiff = measWatchSeconds - refWatchSeconds;
 
   // Expected elapsed seconds on the watch (device elapsed time)
   const expectedElapsedS = elapsedMs / 1000;
 
-  // The watch's elapsed time
-  let watchElapsedS = rawDiff;
-
-  // Handle day boundary wrapping: if difference is unreasonably large/small,
-  // adjust by +/- 86400 seconds
-  const expectedMod = expectedElapsedS % 86400;
-  if (watchElapsedS < expectedMod - 43200) watchElapsedS += 86400;
-  if (watchElapsedS > expectedMod + 43200) watchElapsedS -= 86400;
+  // Reconstruct watch elapsed time: rawDiff is always in (-86400, 86400) because
+  // both values are time-of-day seconds. We find the integer N such that
+  // rawDiff + N*86400 is closest to expectedElapsedS (handles midnight crossings
+  // and multi-day measurements correctly).
+  const N = Math.round((expectedElapsedS - rawDiff) / 86400);
+  const watchElapsedS = rawDiff + N * 86400;
 
   const driftSeconds = watchElapsedS - expectedElapsedS;
   const elapsedDays = elapsedMs / 86400000;

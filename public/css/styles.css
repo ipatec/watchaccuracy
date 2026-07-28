@@ -511,3 +511,30 @@ main {
   word-break: break-all;
   color: var(--text2);
 }
+
+/* ─── OCR status ───────────────────────────────────────────────────────────── */
+.ocr-status {
+  font-size: .8rem;
+  padding: 8px 10px;
+  border-radius: var(--radius-sm);
+  margin-bottom: 10px;
+  display: none;
+}
+.ocr-status.loading {
+  display: block;
+  background: rgba(108,99,255,.12);
+  color: var(--accent);
+  border: 1px solid var(--accent);
+}
+.ocr-status.detected {
+  display: block;
+  background: rgba(34,197,94,.12);
+  color: var(--green);
+  border: 1px solid var(--green);
+}
+.ocr-status.failed {
+  display: block;
+  background: rgba(245,158,11,.12);
+  color: var(--amber);
+  border: 1px solid var(--amber);
+}

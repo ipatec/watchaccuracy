@@ -3,6 +3,13 @@
 
 // ─── API helpers ────────────────────────────────────────────────────────────
 async function api(method, path, body, isFormData = false) {
+  // Append the write token to every request so the backend can grant access
+  // to watches shared via a "Record link".
+  let url = path;
+  if (writeToken) {
+    const sep = path.includes('?') ? '&' : '?';
+    url = `${path}${sep}write_token=${encodeURIComponent(writeToken)}`;
+  }
   const opts = {
     method,
     credentials: 'same-origin'
@@ -15,7 +22,7 @@ async function api(method, path, body, isFormData = false) {
       opts.body = JSON.stringify(body);
     }
   }
-  const res = await fetch(path, opts);
+  const res = await fetch(url, opts);
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
   return data;
@@ -33,6 +40,9 @@ let cameraStream = null;
 let capturedPhotoBlob = null;
 let syncClockInterval = null;
 let myUserId = null;
+
+// Write token from URL search params (e.g. ?wt=TOKEN), grants record access on shared links
+const writeToken = new URLSearchParams(location.search).get('wt') || null;
 
 // ─── Router (hash-based) ─────────────────────────────────────────────────────
 const routes = {};
@@ -185,6 +195,9 @@ route('/watch', async ([watchId]) => {
     ]);
 
     const isOwner = watch.user_id === myUserId;
+    // canRecord: owner always can; visitors can if they have a valid write token
+    // (the backend sets has_write_access=true in the response when the token is valid)
+    const canRecord = isOwner || !!watch.has_write_access;
     const name = watch.brand ? `${esc(watch.brand)} ${esc(watch.model)}` : esc(watch.model) || 'Unnamed Watch';
     setHeader(name, true);
 
@@ -198,14 +211,31 @@ route('/watch', async ([watchId]) => {
         measurements.filter(m => m.drift_rate_spd !== null).length
       : null;
 
-    const shareUrl = `${location.origin}/#/watch/${watchId}`;
+    const viewUrl   = `${location.origin}/#/watch/${watchId}`;
+    const recordUrl = isOwner && watch.write_token
+      ? `${location.origin}/?wt=${encodeURIComponent(watch.write_token)}#/watch/${watchId}`
+      : null;
 
     showMain(`
-      ${watch.is_public ? `
+      ${isOwner && recordUrl ? `
+        <div class="share-banner" style="flex-direction:column;align-items:stretch;gap:8px">
+          ${watch.is_public ? `
+            <div style="display:flex;align-items:center;gap:10px">
+              <span>👁</span>
+              <span class="url" style="flex:1">${viewUrl}</span>
+              <button class="btn btn-ghost" style="padding:6px 10px;font-size:.8rem;white-space:nowrap" onclick="copyShare('${viewUrl}')">Copy</button>
+            </div>` : ''}
+          <div style="display:flex;align-items:center;gap:10px">
+            <span>✏️</span>
+            <span class="url" style="flex:1">${recordUrl}</span>
+            <button class="btn btn-ghost" style="padding:6px 10px;font-size:.8rem;white-space:nowrap" onclick="copyShare('${recordUrl}')">Copy</button>
+          </div>
+          <p style="font-size:.72rem;color:var(--text2);margin:0">✏️ Record link lets anyone with it add measurements · 👁 View link is read-only</p>
+        </div>` : watch.is_public ? `
         <div class="share-banner">
           <span>🔗</span>
-          <span class="url">${shareUrl}</span>
-          <button class="btn btn-ghost" style="padding:6px 10px;font-size:.8rem" onclick="copyShare('${shareUrl}')">Copy</button>
+          <span class="url">${viewUrl}</span>
+          <button class="btn btn-ghost" style="padding:6px 10px;font-size:.8rem" onclick="copyShare('${viewUrl}')">Copy</button>
         </div>` : ''}
 
       <div class="stats-grid">
@@ -240,11 +270,11 @@ route('/watch', async ([watchId]) => {
           </div>
         </div>` : ''}
 
-      ${isOwner ? `
+      ${canRecord ? `
         <div class="flex-row mb-8">
           <button class="btn btn-primary flex-1" onclick="navigate('#/watch/${watchId}/measure')">📷 Record Measurement</button>
           <button class="btn btn-ghost" onclick="navigate('#/watch/${watchId}/reset')" title="Sync reference">🔄</button>
-          <button class="btn btn-ghost" onclick="showEditModal('${watchId}')" title="Edit">✏️</button>
+          ${isOwner ? `<button class="btn btn-ghost" onclick="showEditModal('${watchId}')" title="Edit">✏️</button>` : ''}
         </div>` : ''}
 
       <div class="card" id="meas-list">

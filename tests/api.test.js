@@ -235,6 +235,146 @@ test('POST reference: missing watch_time_seconds returns 400', async () => {
   assert.equal(r.status, 400);
 });
 
+test('POST /api/watches returns write_token for owner', async () => {
+  const r = await req('POST', '/api/watches', { brand: 'Token', model: 'Test', is_public: 0 });
+  assert.equal(r.status, 201);
+  assert.ok(r.body.write_token, 'write_token should be present for owner');
+});
+
+test('GET /api/watches/:id does not expose write_token to non-owner', async () => {
+  // Create a public watch so another user can access it
+  const w = await req('POST', '/api/watches', { brand: 'Shared', model: 'Watch', is_public: 1 });
+  assert.equal(w.status, 201);
+  const sharedId = w.body.id;
+
+  const savedCookie = cookieJar;
+  cookieJar = ''; // new user
+  try {
+    await req('GET', '/api/me');
+    const r = await req('GET', `/api/watches/${sharedId}`);
+    assert.equal(r.status, 200);
+    assert.equal(r.body.write_token, undefined, 'write_token must not be visible to non-owner');
+  } finally {
+    cookieJar = savedCookie;
+  }
+});
+
+test('Write token grants access to private watch', async () => {
+  // user1 creates a private watch
+  const w = await req('POST', '/api/watches', { brand: 'Private', model: 'Shared', is_public: 0 });
+  assert.equal(w.status, 201);
+  const privateId = w.body.id;
+  const token = w.body.write_token;
+  assert.ok(token, 'write_token should be set');
+
+  const savedCookie = cookieJar;
+  cookieJar = ''; // new user
+  try {
+    await req('GET', '/api/me');
+
+    // Without token: should be denied
+    const denied = await req('GET', `/api/watches/${privateId}`);
+    assert.equal(denied.status, 403);
+
+    // With token: should succeed and include has_write_access flag
+    const granted = await req('GET', `/api/watches/${privateId}?write_token=${token}`);
+    assert.equal(granted.status, 200);
+    assert.equal(granted.body.brand, 'Private');
+    assert.equal(granted.body.has_write_access, true, 'has_write_access should be true with valid token');
+    assert.equal(granted.body.write_token, undefined, 'write_token must not be exposed to non-owner');
+  } finally {
+    cookieJar = savedCookie;
+  }
+});
+
+test('Write token allows recording measurements on private watch', async () => {
+  // user1 creates a private watch and sets a reference
+  const w = await req('POST', '/api/watches', { brand: 'Record', model: 'Token', is_public: 0 });
+  assert.equal(w.status, 201);
+  const wId = w.body.id;
+  const token = w.body.write_token;
+
+  const T0 = Date.now() - 86400000;
+  await req('POST', `/api/watches/${wId}/reference`, {
+    device_timestamp: T0,
+    watch_time_seconds: 12 * 3600
+  });
+
+  const savedCookie = cookieJar;
+  cookieJar = ''; // new user (simulates sharing via link)
+  try {
+    await req('GET', '/api/me');
+
+    // POST measurement with write token
+    const r = await req('POST', `/api/watches/${wId}/measurements?write_token=${token}`, {
+      device_timestamp: Date.now(),
+      watch_hours: 12,
+      watch_minutes: 0,
+      watch_seconds: 5,
+      notes: 'via token'
+    });
+    assert.equal(r.status, 201);
+    assert.equal(r.body.notes, 'via token');
+
+    // GET measurements with write token
+    const list = await req('GET', `/api/watches/${wId}/measurements?write_token=${token}`);
+    assert.equal(list.status, 200);
+    assert.ok(list.body.length >= 1);
+
+    // Without token: denied
+    const denied = await req('POST', `/api/watches/${wId}/measurements`, {
+      device_timestamp: Date.now(),
+      watch_hours: 12, watch_minutes: 0, watch_seconds: 6
+    });
+    assert.equal(denied.status, 403);
+  } finally {
+    cookieJar = savedCookie;
+  }
+});
+
+test('Write token allows setting reference point', async () => {
+  const w = await req('POST', '/api/watches', { brand: 'Ref', model: 'Token', is_public: 0 });
+  const token = w.body.write_token;
+  const wId = w.body.id;
+
+  const savedCookie = cookieJar;
+  cookieJar = '';
+  try {
+    await req('GET', '/api/me');
+
+    const r = await req('POST', `/api/watches/${wId}/reference?write_token=${token}`, {
+      device_timestamp: Date.now(),
+      watch_time_seconds: 12 * 3600
+    });
+    assert.equal(r.status, 201);
+
+    // Also GET reference with token
+    const ref = await req('GET', `/api/watches/${wId}/reference?write_token=${token}`);
+    assert.equal(ref.status, 200);
+    assert.ok(ref.body);
+  } finally {
+    cookieJar = savedCookie;
+  }
+});
+
+test('Invalid write token is rejected', async () => {
+  const w = await req('POST', '/api/watches', { brand: 'Bad', model: 'Token', is_public: 0 });
+  const wId = w.body.id;
+
+  const savedCookie = cookieJar;
+  cookieJar = '';
+  try {
+    await req('GET', '/api/me');
+    const r = await req('POST', `/api/watches/${wId}/measurements?write_token=wrong-token`, {
+      device_timestamp: Date.now(),
+      watch_hours: 12, watch_minutes: 0, watch_seconds: 0
+    });
+    assert.equal(r.status, 403);
+  } finally {
+    cookieJar = savedCookie;
+  }
+});
+
 test('calcDrift: day boundary wrapping works', () => {
   const { calcDrift } = require('../src/database');
   const { DatabaseSync } = require('node:sqlite');

@@ -4,6 +4,7 @@ const express = require('express');
 const path = require('path');
 const multer = require('multer');
 const { getDb, calcDrift } = require('../database');
+const { hasValidWriteToken } = require('../auth');
 
 const router = express.Router({ mergeParams: true });
 
@@ -30,7 +31,7 @@ router.get('/', (req, res) => {
   if (!watch) return res.status(404).json({ error: 'Watch not found' });
 
   const isOwner = watch.user_id === req.userId;
-  const hasToken = req.query.write_token && watch.write_token && req.query.write_token === watch.write_token;
+  const hasToken = hasValidWriteToken(req, watch);
   if (!isOwner && !watch.is_public && !hasToken) {
     return res.status(403).json({ error: 'Access denied' });
   }
@@ -50,7 +51,7 @@ router.post('/', upload.single('photo'), (req, res) => {
   if (!watch) return res.status(404).json({ error: 'Watch not found' });
 
   const isOwner = watch.user_id === req.userId;
-  const hasToken = req.query.write_token && watch.write_token && req.query.write_token === watch.write_token;
+  const hasToken = hasValidWriteToken(req, watch);
   if (!isOwner && !hasToken) {
     return res.status(403).json({ error: 'Access denied' });
   }

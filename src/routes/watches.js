@@ -3,15 +3,9 @@
 const express = require('express');
 const { v4: uuidv4 } = require('uuid');
 const { getDb } = require('../database');
+const { hasValidWriteToken } = require('../auth');
 
 const router = express.Router();
-
-/** Returns true when the request carries a valid write token for this watch. */
-function hasValidWriteToken(req, watch) {
-  return req.query.write_token &&
-    watch.write_token &&
-    req.query.write_token === watch.write_token;
-}
 
 // GET /api/watches - list current user's watches
 router.get('/', (req, res) => {

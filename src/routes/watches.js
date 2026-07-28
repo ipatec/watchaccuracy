@@ -50,14 +50,15 @@ router.get('/:id', (req, res) => {
   if (!watch) return res.status(404).json({ error: 'Watch not found' });
 
   const isOwner = watch.user_id === req.userId;
-  if (!isOwner && !watch.is_public && !hasValidWriteToken(req, watch)) {
+  const tokenValid = hasValidWriteToken(req, watch);
+  if (!isOwner && !watch.is_public && !tokenValid) {
     return res.status(403).json({ error: 'Access denied' });
   }
 
   // Only expose the write_token to the owner
   if (!isOwner) {
     const { write_token, ...safeWatch } = watch;
-    return res.json(safeWatch);
+    return res.json({ ...safeWatch, has_write_access: tokenValid });
   }
   res.json(watch);
 });

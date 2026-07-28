@@ -276,10 +276,12 @@ test('Write token grants access to private watch', async () => {
     const denied = await req('GET', `/api/watches/${privateId}`);
     assert.equal(denied.status, 403);
 
-    // With token: should succeed
+    // With token: should succeed and include has_write_access flag
     const granted = await req('GET', `/api/watches/${privateId}?write_token=${token}`);
     assert.equal(granted.status, 200);
     assert.equal(granted.body.brand, 'Private');
+    assert.equal(granted.body.has_write_access, true, 'has_write_access should be true with valid token');
+    assert.equal(granted.body.write_token, undefined, 'write_token must not be exposed to non-owner');
   } finally {
     cookieJar = savedCookie;
   }
@@ -372,7 +374,6 @@ test('Invalid write token is rejected', async () => {
     cookieJar = savedCookie;
   }
 });
-
 
 test('calcDrift: day boundary wrapping works', () => {
   const { calcDrift } = require('../src/database');

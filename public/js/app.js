@@ -195,7 +195,9 @@ route('/watch', async ([watchId]) => {
     ]);
 
     const isOwner = watch.user_id === myUserId;
-    const canRecord = isOwner || !!writeToken;
+    // canRecord: owner always can; visitors can if they have a valid write token
+    // (the backend sets has_write_access=true in the response when the token is valid)
+    const canRecord = isOwner || !!watch.has_write_access;
     const name = watch.brand ? `${esc(watch.brand)} ${esc(watch.model)}` : esc(watch.model) || 'Unnamed Watch';
     setHeader(name, true);
 

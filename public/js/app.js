@@ -522,6 +522,18 @@ async function showMeasureView(watchId) {
         <p style="color:var(--amber)">⚠️ No reference point set. <a href="#" onclick="navigate('#/watch/${watchId}/reset');return false" style="color:var(--accent)">Sync first →</a></p>
       </div>` : ''}
 
+    <details class="photo-tips">
+      <summary>📸 Tips for better OCR results</summary>
+      <ul class="tips-list">
+        <li>Hold the watch 20–30 cm away with the dial filling most of the frame</li>
+        <li>Use soft, even lighting — avoid direct flash and window reflections</li>
+        <li>Shoot straight on to the dial (no tilt or extreme angle)</li>
+        <li>Make sure the digits are in sharp focus before capturing</li>
+        <li>A plain background behind the watch improves contrast</li>
+        <li>After capture, always verify the detected time before saving</li>
+      </ul>
+    </details>
+
     <div class="card">
       <div class="camera-area" id="camera-area">
         <video id="cam-video" autoplay playsinline muted></video>
@@ -620,6 +632,67 @@ function parseTimeFromText(text) {
   return null;
 }
 
+/**
+ * Preprocesses a canvas image to improve OCR accuracy on watch dials.
+ * Steps: 2× upscale (if small), grayscale, auto-invert for dark dials,
+ * histogram contrast stretch.
+ * Returns a new offscreen canvas with the processed image.
+ */
+function preprocessForOcr(sourceCanvas) {
+  const sw = sourceCanvas.width;
+  const sh = sourceCanvas.height;
+  // Scale up small images so Tesseract has more pixels to work with
+  const scale = (sw < 800 || sh < 600) ? 2 : 1;
+  const dw = sw * scale;
+  const dh = sh * scale;
+
+  const out = document.createElement('canvas');
+  out.width  = dw;
+  out.height = dh;
+  const ctx = out.getContext('2d');
+  ctx.imageSmoothingEnabled = true;
+  ctx.imageSmoothingQuality = 'high';
+  ctx.drawImage(sourceCanvas, 0, 0, dw, dh);
+
+  const imgData = ctx.getImageData(0, 0, dw, dh);
+  const d = imgData.data;
+  const len = d.length;
+
+  // 1. Convert to grayscale
+  for (let i = 0; i < len; i += 4) {
+    const g = Math.round(0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2]);
+    d[i] = d[i + 1] = d[i + 2] = g;
+  }
+
+  // 2. Auto-invert: dark-background dials (mean luminance < 118) are inverted so
+  //    digits become dark on a light background — Tesseract works best that way.
+  let sum = 0;
+  for (let i = 0; i < len; i += 4) sum += d[i];
+  if (sum / (len / 4) < 118) {
+    for (let i = 0; i < len; i += 4) {
+      d[i] = d[i + 1] = d[i + 2] = 255 - d[i];
+    }
+  }
+
+  // 3. Auto contrast stretch – clip top/bottom 2 % of histogram so a few
+  //    very bright or very dark pixels don't prevent effective stretching.
+  const hist = new Uint32Array(256);
+  for (let i = 0; i < len; i += 4) hist[d[i]]++;
+  const clip = (len / 4) * 0.02;
+  let lo = 0, hi = 255, acc = 0;
+  for (let v = 0; v < 256; v++) { acc += hist[v]; if (acc >= clip) { lo = v; break; } }
+  acc = 0;
+  for (let v = 255; v >= 0; v--) { acc += hist[v]; if (acc >= clip) { hi = v; break; } }
+  const range = hi - lo || 1;
+  for (let i = 0; i < len; i += 4) {
+    const v = Math.min(255, Math.max(0, Math.round((d[i] - lo) / range * 255)));
+    d[i] = d[i + 1] = d[i + 2] = v;
+  }
+
+  ctx.putImageData(imgData, 0, 0);
+  return out;
+}
+
 async function runOcrOnCanvas(canvas) {
   const statusEl = document.getElementById('ocr-status');
   if (!statusEl) return;
@@ -631,15 +704,32 @@ async function runOcrOnCanvas(canvas) {
     return;
   }
 
-  statusEl.textContent = '🔍 Scanning photo for time…';
+  statusEl.innerHTML = '🔍 Preprocessing image…';
   statusEl.className = 'ocr-status loading';
 
+  const processedCanvas = preprocessForOcr(canvas);
+
+  statusEl.innerHTML = '🔍 Scanning for time… <span class="ocr-pct">0%</span>';
+
   try {
-    const { data: { text } } = await Tesseract.recognize(canvas, 'eng', {
-      tessedit_char_whitelist: '0123456789:'
+    const { data } = await Tesseract.recognize(processedCanvas, 'eng', {
+      // Restrict recognised characters to clock digits and colon
+      tessedit_char_whitelist: '0123456789:',
+      // PSM 11 = Sparse text: finds text scattered across the image without
+      // assuming a reading order — best for watch dial numerals.
+      tessedit_pageseg_mode: '11',
+      // Log recognition progress so we can update the percentage indicator
+      logger: m => {
+        if (m.status === 'recognizing text') {
+          const pct = statusEl.querySelector('.ocr-pct');
+          if (pct) pct.textContent = `${Math.round(m.progress * 100)}%`;
+        }
+      }
     });
 
-    const time = parseTimeFromText(text);
+    const time = parseTimeFromText(data.text);
+    const confidence = Math.round(data.confidence || 0);
+
     if (time) {
       const hEl = document.getElementById('meas-h');
       const mEl = document.getElementById('meas-m');
@@ -647,7 +737,12 @@ async function runOcrOnCanvas(canvas) {
       if (hEl) hEl.value = time.h;
       if (mEl) mEl.value = time.m;
       if (sEl) sEl.value = time.s;
-      statusEl.textContent = `✓ Detected ${pad(time.h)}:${pad(time.m)}:${pad(time.s)} — please verify`;
+
+      const confClass = confidence >= 70 ? 'conf-high' : confidence >= 40 ? 'conf-med' : 'conf-low';
+      const warning   = confidence < 50 ? ' — <strong>low confidence, verify carefully</strong>' : ' — please verify';
+      statusEl.innerHTML =
+        `✓ Detected <strong>${pad(time.h)}:${pad(time.m)}:${pad(time.s)}</strong>` +
+        ` <span class="ocr-conf ${confClass}">${confidence}%</span>${warning}`;
       statusEl.className = 'ocr-status detected';
     } else {
       statusEl.textContent = '⚠ Could not detect time — please enter manually';
